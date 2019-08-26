@@ -1,0 +1,77 @@
+version: 2.1
+
+orbs:
+  # https://circleci.com/orbs/registry/orb/asilva/ecr-ecs-deploy
+  theorb: asilva/ecr-ecs-deploy@0.0.9
+
+## WORKFLOW DE DEPLOY
+# build_and_push --> update_service STAG-WEB
+#                \-> update_service STAG-WORKER
+workflows:
+  build_and_push_to_ecr:
+    jobs:
+      # Se compila la imagen solo en los branch MASTER y DEVELOP (omitir si tiene el tag "no-deploy")
+      - theorb/build_and_push:
+          context: shared-context
+          name: build-image
+          filters:
+            branches: {only: ["develop"]}
+            tags: {ignore: "no-deploy"}
+
+      # Hacer deploy de stag-erpro solo en el branch DEVELOP
+      - theorb/update_service:
+          context: shared-context
+          name: update-stag-web
+          service_name: "stag-erpro-web"
+          cluster_name: "stag-cluster"
+          container_name: "web"
+          requires:
+            - build-image
+          filters:
+            branches: {only: ["develop"]}
+      - theorb/update_service:
+          context: shared-context
+          name: update-stag-worker
+          service_name: "stag-erpro-worker"
+          cluster_name: "stag-cluster"
+          container_name: "worker"
+          requires:
+            - build-image
+          filters:
+            branches: {only: ["develop", "feature/circleci"]}
+
+
+      # Hacer deploy de stag-erpro solo en el branch DEVELOP
+      - theorb/update_service:
+          name: update-prod-web
+          service_name: "prod-erpro-web"
+          cluster_name: "prod-cluster"
+          container_name: "web"
+          requires:
+            - build-image
+          context: shared-context
+          filters:
+            branches: {only: ["master"]}
+      - theorb/update_service:
+          name: update-prod-worker
+          service_name: "prod-erpro-worker"
+          cluster_name: "prod-cluster"
+          container_name: "worker"
+          requires:
+            - build-image
+          context: shared-context
+          filters:
+            branches: {only: ["master"]}
+
+# ENVIRONMENT VARIABLES
+# APP_NAME              Ej. erpro               se agrega el nombre antes del mensaje en slack
+# AWS_REPO              Ej. erpro               el nombre del repositorio en ECR para subir la imagen
+# SLACK_CHANNEL         Ej. devops-erpro        el canal en donde se publican los mensajes de slack
+
+# SHARED-CONTEXT VARIABLES
+# AWS_ACCESS_KEY_ID	    Ej. ••••PCVO
+# AWS_ACCOUNT_ID	    Ej. ••••3931
+# AWS_ECR_ACCOUNT_URL	Ej. 123123123123.dkr.ecr.us-east-1.amazonaws.com
+# AWS_REGION	        Ej. us-east-1
+# AWS_SECRET_ACCESS_KEY	Ej. ••••bL0P
+# SLACK_WEBHOOK	        Ej. https://hooks.slack.com/services/XXX123X/ASDASD123/KSKKSKSK123123123

@@ -1,10 +1,3 @@
-este repositorio sirve de
+This a orb for circleci 2.1, it buils a docker image, pushing it to AWS ECR, and sending it to AWS ECS (with slack notifications)
 
-        version: 2.1
-
-
-circleci namespace create asilva github AlejandroSilva
-circleci orb create asilva/ecr-ecs-deploy
-circleci orb validate <path> [flags]
-
-circleci orb publish config.yml asilva/ecr-ecs-deploy@0.0.1
+In the folder how-to-use is a config.yml file with an real example worflow of how to use it
