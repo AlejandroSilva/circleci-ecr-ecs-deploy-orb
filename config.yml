@@ -105,28 +105,23 @@ jobs:
       - save_image_tag_on_disk
       - slack_msg:
           text: "*${APP_NAME}* - Nuevo build iniciado por *${CIRCLE_USERNAME}* (en ${CIRCLE_PROJECT_REPONAME}/${CIRCLE_BRANCH}, ${CIRCLE_SHA1:0:7})"
-
-#      - aws-ecr/build-and-push-image:
-#          repo: "${AWS_REPO}"
-#          # se usa el archivo docker/prod.Dockerfile
-#          dockerfile: "docker/prod.Dockerfile"
-#          # tagear la imagen de docker generada
-#          tag: ${IMAGE_TAG}
-#          extra-build-args: "-t $AWS_ECR_ACCOUNT_URL/${AWS_REPO}:latest"
-
       - aws-cli/install
       - aws-cli/configure:
           aws-region: <<parameters.region>>
       - aws-ecr/ecr-login:
           region: <<parameters.region>>
       - checkout
+      # descargar una imagen ya existen para hacer el build mas rapido al saltarse layers
+      - run: docker pull ${AWS_ECR_ACCOUNT_URL}/${AWS_REPO}:latest || true
       - aws-ecr/build-image:
           dockerfile: "docker/prod.Dockerfile"
           repo: "${AWS_REPO}"
           tag: ${IMAGE_TAG}
           extra-build-args: "-t $AWS_ECR_ACCOUNT_URL/${AWS_REPO}:latest"
-
-#      - docker pull $CI_REGISTRY_IMAGE:latest || true
+      # enviar la imagen con dos tags
+      - aws-ecr/push-image:
+          repo: "${AWS_REPO}"
+          tag: ${IMAGE_TAG}
       - aws-ecr/push-image:
           repo: "${AWS_REPO}"
           tag: "latest"
