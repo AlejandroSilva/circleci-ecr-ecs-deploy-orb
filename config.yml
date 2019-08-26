@@ -119,7 +119,7 @@ jobs:
           aws-region: <<parameters.region>>
       - aws-ecr/ecr-login:
           region: <<parameters.region>>
-
+      - checkout
       - aws-ecr/build-image:
           dockerfile: "docker/prod.Dockerfile"
           repo: "${AWS_REPO}"
