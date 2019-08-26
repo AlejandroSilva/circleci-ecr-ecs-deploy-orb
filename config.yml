@@ -1,0 +1,166 @@
+version: 2.1
+
+description: |
+  This orb enable the use of
+
+#executors:
+#  alpine:
+#    docker:
+#      - environment:
+#          TERM: dumb
+#        image: cibuilds/base:latest
+#    resource_class: small
+
+orbs:
+  # https://circleci.com/orbs/registry/orb/circleci/aws-cli
+  aws-cli: circleci/aws-cli@0.1.4
+  # https://circleci.com/orbs/registry/orb/circleci/aws-ecr
+  aws-ecr: circleci/aws-ecr@6.2.0
+  # https://circleci.com/orbs/registry/orb/circleci/aws-ecs
+  aws-ecs: circleci/aws-ecs@0.0.11
+
+anchors:
+  &run_slack_command
+  name: Envia un mensaje por slack
+  command: |
+    if [ -z "<< parameters.webhook >>" ]; then
+      echo "falta el parametro 'webhook'"
+      exit 1
+    fi
+    if [ -z "<< parameters.channel >>" ]; then
+      echo "falta el parametro 'channel'"
+      exit 1
+    fi
+    if [ -z "<< parameters.text >>" ]; then
+      echo "falta el parametro 'text'"
+      exit 1
+    fi
+    payload="payload={
+            \"channel\": \"<< parameters.channel >>\",
+            \"username\": \"CircleCI\",
+            \"icon_emoji\": \":circleci:\",
+            \"text\": \"<< parameters.text >>\"
+    }"
+    curl -m 5 --data-urlencode "${payload}" << parameters.webhook >>
+
+
+commands:
+  save_image_tag_on_disk:
+    steps:
+      - run:
+          name: crea la variable de ambiente IMAGE_TAG y la guarda en /tmp/shared-env/image-tag
+          command: |
+            # Ej. 20190820-124026_SebastianOliva_master_3a17155_CI
+            RAW_IMAGE_TAG=$(TZ=America/Santiago date +%Y%m%d-%H%M%S)_${CIRCLE_USERNAME}_${CIRCLE_BRANCH}_${CIRCLE_SHA1:0:7}_CI
+            # quitar todos los caracteres que no sean letras y numeros
+            mkdir /tmp/shared-env
+            echo "export IMAGE_TAG=$(echo $RAW_IMAGE_TAG | sed 's/[^a-zA-Z0-9_-]//g')" >> /tmp/shared-env/image-tag
+            cat /tmp/shared-env/image-tag >> $BASH_ENV
+      - persist_to_workspace:
+          root: /tmp/shared-env
+          paths: image-tag
+
+  load_image_tag_from_disk:
+    steps:
+      - attach_workspace:
+          at: /tmp/shared-env
+      - run:
+          name: carga variable de ambiente IMAGE_TAG desde /tmp/shared-env/image-tag
+          command: cat /tmp/shared-env/image-tag >> $BASH_ENV
+
+  slack_msg:
+    description: "Envia un text a un canal(es)/usuario(s) de slack"
+    parameters:
+      webhook: {type: string, default: $SLACK_WEBHOOK}
+      channel: {type: string, default: $SLACK_CHANNEL}
+      text: {type: string}
+    steps:
+      - run:
+          <<: *run_slack_command
+          #command: |
+          #  if [ -z "<< parameters.webhook ...
+
+  slack_msg_on_failure:
+    description: "Envia un text a un canal(es)/usuario(s) de slack cuando el proceso falla"
+    parameters:
+      webhook: {type: string, default: $SLACK_WEBHOOK}
+      channel: {type: string, default: $SLACK_CHANNEL}
+      text: {type: string}
+    steps:
+      - run:
+          <<: *run_slack_command
+          #command: |
+          #  if [ -z "<< parameters.webhook ...
+          when: on_fail
+
+jobs:
+  build_and_push:
+    parameters:
+      region: {type: env_var_name, default: AWS_REGION}
+    # slack: "nuevo build"
+    # aws-ecr/build-and-push-image
+    # slack: "imagen disponible"
+    executor: aws-ecr/default  # usar el executor de aws-ecr para poder usar su command (aws-ecr/build-and-push-image)
+    steps:
+      - save_image_tag_on_disk
+      - slack_msg:
+          text: "*${APP_NAME}* - Nuevo build iniciado por *${CIRCLE_USERNAME}* (en ${CIRCLE_PROJECT_REPONAME}/${CIRCLE_BRANCH}, ${CIRCLE_SHA1:0:7})"
+
+#      - aws-ecr/build-and-push-image:
+#          repo: "${AWS_REPO}"
+#          # se usa el archivo docker/prod.Dockerfile
+#          dockerfile: "docker/prod.Dockerfile"
+#          # tagear la imagen de docker generada
+#          tag: ${IMAGE_TAG}
+#          extra-build-args: "-t $AWS_ECR_ACCOUNT_URL/${AWS_REPO}:latest"
+
+      - aws-cli/install
+      - aws-cli/configure:
+          aws-region: <<parameters.region>>
+      - aws-ecr/ecr-login:
+          region: <<parameters.region>>
+
+      - aws-ecr/build-image:
+          dockerfile: "docker/prod.Dockerfile"
+          repo: "${AWS_REPO}"
+          tag: ${IMAGE_TAG}
+          extra-build-args: "-t $AWS_ECR_ACCOUNT_URL/${AWS_REPO}:latest"
+
+#      - docker pull $CI_REGISTRY_IMAGE:latest || true
+      - aws-ecr/push-image:
+          repo: "${AWS_REPO}"
+          tag: "latest"
+      - slack_msg:
+          text: "*${APP_NAME}* - La imagen *${IMAGE_TAG}* ya esta disponible en ERC"
+      - slack_msg_on_failure:
+          text: "*${APP_NAME}* - Error al construir la imagen ${CIRCLE_BUILD_URL} ${IMAGE_TAG}"
+
+  update_service:
+    # slack: "actualizando servicio"
+    # aws-ecs/update-service: crea un task def y actualiza el servicio
+    # slack: "servicio actualizado""
+    docker:
+      - image: circleci/python:3.7.1 # por defecto la misma que ocupa el obr aws-ecs
+    parameters:
+      service_name: {type: string}
+      cluster_name: {type: string}
+      container_name: {type: string}
+    steps:
+      - aws-cli/install
+      - aws-cli/configure
+      - load_image_tag_from_disk
+      - aws-ecs/update-service:
+          family: << parameters.service_name >>
+          cluster-name: << parameters.cluster_name >>
+          container-image-name-updates: "container=<< parameters.container_name >>,tag=${IMAGE_TAG}"
+      - slack_msg:
+          text: "*${APP_NAME}* - Servicio *<< parameters.service_name >>* actualizado, yuhu!!"
+      - slack_msg_on_failure:
+          text: "*${APP_NAME}* - Error al actualizar el servicio *<< parameters.service_name >>*, ${CIRCLE_BUILD_URL}"
+
+  slack_manual_approval:
+    executor: aws-ecr/default  # usar el executor de aws-ecr para poder usar su command (aws-ecr/build-and-push-image)
+    steps:
+      - slack_msg:
+          text: "*${APP_NAME}* Deploy de *stag* listo, para pasar a *prod* se debe aceptar manualmente ${CIRCLE_BUILD_URL}"
+
