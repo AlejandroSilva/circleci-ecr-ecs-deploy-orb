@@ -39,8 +39,9 @@ anchors:
             \"icon_emoji\": \":circleci:\",
             \"text\": \"<< parameters.text >>\"
     }"
-    curl -m 5 --data-urlencode "${payload}" << parameters.webhook >>
-
+    # somethimes, the curl fails (curl: (28) Resolving timed out after 5514 milliseconds, #Exited with code 28)
+    # but this step is not mandatory to make the deployment work... so with "|| true" it will success anyways
+    curl -m 5 --data-urlencode "${payload}" << parameters.webhook >> || true
 
 commands:
   save_image_tag_on_workspace:
