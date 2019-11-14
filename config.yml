@@ -16,8 +16,6 @@ orbs:
   aws-cli: circleci/aws-cli@0.1.4
   # https://circleci.com/orbs/registry/orb/circleci/aws-ecr
   aws-ecr: circleci/aws-ecr@6.2.0
-  # https://circleci.com/orbs/registry/orb/circleci/aws-ecs
-  aws-ecs: circleci/aws-ecs@0.0.11
 
 anchors:
   &run_slack_command
@@ -45,7 +43,7 @@ anchors:
 
 
 commands:
-  save_image_tag_on_disk:
+  save_image_tag_on_workspace:
     steps:
       - run:
           name: crea la variable de ambiente IMAGE_TAG y la guarda en /tmp/shared-env/image-tag
@@ -60,7 +58,7 @@ commands:
           root: /tmp/shared-env
           paths: image-tag
 
-  load_image_tag_from_disk:
+  load_image_tag_from_workspace:
     steps:
       - attach_workspace:
           at: /tmp/shared-env
@@ -93,6 +91,71 @@ commands:
           #  if [ -z "<< parameters.webhook ...
           when: on_fail
 
+  update_taskdef_and_service:
+    parameters:
+      family: {type: string}
+      image: {type: string}
+    steps:
+      - run:
+          name: pip install boto3
+          command: |
+            export PIP=$(which pip pip3 | head -1)
+            sudo $PIP install boto3
+      - run:
+          name: create the script "update-task-and-service.py"
+          command: |
+            SCRIPT=$(mktemp update-task-and-service-XXXX.py)
+            chmod +x $SCRIPT
+            # "<-", all leading <tab> characters shall be stripped from input
+            cat > $SCRIPT \<<-EOF
+            import sys, boto3
+            [_, family, image, *other] = sys.argv
+            ecs_client = boto3.session.Session().client(service_name='ecs')
+            ssm_client = boto3.session.Session().client(service_name='ssm')
+            # take the last task definition of the family
+            try:
+                taskdef_desc = ecs_client.describe_task_definition(taskDefinition=family).get('taskDefinition')
+                print(f"The last task definition of '{family}' is '{taskdef_desc.get('taskDefinitionArn').split('/')[1]}'")
+                for unwanted_key in ["taskDefinitionArn", "revision", "status", "requiresAttributes", "compatibilities"]:
+                    taskdef_desc.pop(unwanted_key, None)
+            except:
+                raise Exception(f"'{family}' is not a valid taskdefinition")
+            # get the SSM params and convert it to secrets
+            try:
+                [env, project, cont] = family.split('-')
+                ssm_prefix = f"/{env.upper()}/{project.upper()}/"
+                print(f"Seeking for SSM params with the prefix '{ssm_prefix}'")
+                resp = ssm_client.get_parameters_by_path(Path=ssm_prefix, MaxResults=10)
+                ssm_params = resp.get('Parameters')
+                next_token = resp.get('NextToken')
+                while next_token:
+                    next_resp = ssm_client.get_parameters_by_path(Path=ssm_prefix, MaxResults=10, NextToken=next_token)
+                    ssm_params += next_resp.get('Parameters')
+                    next_token = next_resp.get('NextToken')
+                ssm_names = list(map(lambda p: p.get('Name'), ssm_params))
+                print(f"The following params where found: ", list(map(lambda n: n.split('/')[-1], ssm_names)))
+                secrets = list(map(lambda name: {'name': name.split('/')[-1], 'valueFrom': name}, ssm_names))
+            except:
+                raise Exception(f"Error trying to get the secrets from the SSM params")
+            # update the ssm secrets + the image used on the containers + the tags of the task definition
+            for cont in taskdef_desc.get('containerDefinitions'):
+                cont['image'] = image
+                cont['secrets'] = secrets
+            taskdef_desc["tags"] = [{"key": "Name", "value": "por CircleCI"}]
+            # crate a new task def + update the service
+            new_taskdef_desc = ecs_client.register_task_definition(**taskdef_desc).get('taskDefinition')
+            new_revision = new_taskdef_desc.get('taskDefinitionArn').split('/')[1]
+            print(f"A new task definition '{new_revision}' was successfully created")
+            ecs_client.update_service(
+                cluster=f"{env}-cluster",
+                service=family,
+                forceNewDeployment=True,
+                taskDefinition=new_revision
+            )
+            print(f"The service {family} was updated with the new task definition")
+            EOF
+            python3 $SCRIPT << parameters.family >> << parameters.image >>
+
 jobs:
   build_and_push:
     parameters:
@@ -102,7 +165,7 @@ jobs:
     # slack: "imagen disponible"
     executor: aws-ecr/default  # usar el executor de aws-ecr para poder usar su command (aws-ecr/build-and-push-image)
     steps:
-      - save_image_tag_on_disk
+      - save_image_tag_on_workspace
       - slack_msg:
           text: "*${APP_NAME}* - Nuevo build iniciado por *${CIRCLE_USERNAME}* (en ${CIRCLE_PROJECT_REPONAME}/${CIRCLE_BRANCH}, ${CIRCLE_SHA1:0:7})"
       - aws-cli/install
@@ -132,7 +195,7 @@ jobs:
 
   update_service:
     # slack: "actualizando servicio"
-    # aws-ecs/update-service: crea un task def y actualiza el servicio
+    # crea un task def y actualiza el servicio
     # slack: "servicio actualizado""
     docker:
       - image: circleci/python:3.7.1 # por defecto la misma que ocupa el obr aws-ecs
@@ -143,11 +206,10 @@ jobs:
     steps:
       - aws-cli/install
       - aws-cli/configure
-      - load_image_tag_from_disk
-      - aws-ecs/update-service:
+      - load_image_tag_from_workspace
+      - update_taskdef_and_service:
           family: << parameters.service_name >>
-          cluster-name: << parameters.cluster_name >>
-          container-image-name-updates: "container=<< parameters.container_name >>,tag=${IMAGE_TAG}"
+          image: ${AWS_ECR_ACCOUNT_URL}/${AWS_REPO}:$IMAGE_TAG
       - slack_msg:
           text: "*${APP_NAME}* - Servicio *<< parameters.service_name >>* actualizado, yuhu!!"
       - slack_msg_on_failure:
