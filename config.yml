@@ -181,7 +181,7 @@ jobs:
           dockerfile: "docker/prod.Dockerfile"
           repo: "${AWS_REPO}"
           tag: ${IMAGE_TAG}
-          extra-build-args: "-t $AWS_ECR_ACCOUNT_URL/${AWS_REPO}:latest --cache-from $AWS_ECR_ACCOUNT_URL/${AWS_REPO}:latest"
+          extra-build-args: "-t $AWS_ECR_ACCOUNT_URL/${AWS_REPO}:latest --cache-from $AWS_ECR_ACCOUNT_URL/${AWS_REPO}:latest --build-arg GIT_BRANCH=${CIRCLE_BRANCH} --build-arg GIT_COMMIT=${CIRCLE_SHA1}"
       # enviar la imagen con dos tags
       - aws-ecr/push-image:
           repo: "${AWS_REPO}"
