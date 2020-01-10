@@ -157,6 +157,36 @@ commands:
             EOF
             python3 $SCRIPT << parameters.family >> << parameters.image >>
 
+
+  rollbar_deploy:
+    description: "notificar a Rollbar el inicio de un deploy"
+    parameters:
+      rollbar_access_token: {type: string, default: $ROLLBACK_ACCESS_TOKEN}
+      revision: {type: string, default: $GIT_SHA}
+      environment: {type: string}
+    steps:
+      - run:
+          name: Enviar POST a Rollbar con el inicio del deploy
+          command: |
+            if [ -z "<< parameters.rollbar_access_token >>" ]; then
+              echo "falta el parametro 'rollbar_access_token'"
+              exit 1
+            fi
+            if [ -z "<< parameters.revision >>" ]; then
+              echo "falta el parametro 'revision'"
+              exit 1
+            fi
+            if [ -z "<< parameters.environment >>" ]; then
+              echo "falta el parametro 'environment'"
+              exit 1
+            fi
+
+            curl -X PATCH https://api.rollbar.com/api/1/deploy/ \
+            --form access_token=<< parameters.rollbar_access_token >> \
+            --form revision=<< parameters.environment >> \
+            --form environment=<< parameters.environment >> \
+            --form local_username='circleci-pipeline'
+
 jobs:
   build_and_push:
     parameters:
@@ -217,8 +247,15 @@ jobs:
           text: "*${APP_NAME}* - Error al actualizar el servicio *<< parameters.service_name >>*, ${CIRCLE_BUILD_URL}"
 
   slack_manual_approval:
-    executor: aws-ecr/default  # usar el executor de aws-ecr para poder usar su command (aws-ecr/build-and-push-image)
+    executor: aws-ecr/default
     steps:
       - slack_msg:
           text: "*${APP_NAME}* Deploy de *stag* listo, para pasar a *prod* se debe aceptar manualmente ${CIRCLE_BUILD_URL}"
 
+  rollbar_notify_deploy:
+    executor: aws-ecr/default
+    parameters:
+      environment: {type: string}
+    steps:
+    - rollbar_deploy:
+        environment: << parameters.environment >>
