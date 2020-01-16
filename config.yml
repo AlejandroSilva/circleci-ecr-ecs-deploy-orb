@@ -162,7 +162,7 @@ commands:
     description: "notificar a Rollbar el inicio de un deploy"
     parameters:
       rollbar_access_token: {type: string, default: $ROLLBACK_ACCESS_TOKEN}
-      revision: {type: string, default: $GIT_SHA}
+      revision: {type: string, default: $CIRCLE_SHA1}
       environment: {type: string}
     steps:
       - run:
@@ -181,9 +181,9 @@ commands:
               exit 1
             fi
 
-            curl -X PATCH https://api.rollbar.com/api/1/deploy/ \
+            curl https://api.rollbar.com/api/1/deploy/ \
             --form access_token=<< parameters.rollbar_access_token >> \
-            --form revision=<< parameters.environment >> \
+            --form revision=<< parameters.revision >> \
             --form environment=<< parameters.environment >> \
             --form local_username='circleci-pipeline'
 
